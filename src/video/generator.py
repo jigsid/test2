@@ -425,11 +425,37 @@ class VideoGenerator:
         Returns:
             VideoFileClip: Color graded video
         """
-        # Implementation for color grading
-        # This is a placeholder - actual implementation would apply
-        # color grading based on provided parameters
-        pass
-        
+        try:
+            # Get intensity parameter
+            intensity = params.get('intensity', 0.5)
+            
+            def color_grade_frame(frame):
+                # Convert to float for processing
+                frame = frame.astype(float)
+                
+                # Adjust contrast
+                frame = frame * (1 + 0.2 * intensity)
+                
+                # Adjust shadows (make them cooler/bluer)
+                shadows_mask = frame < 128
+                frame[shadows_mask] = frame[shadows_mask] * [0.9, 0.95, 1.1]  # Blue tint
+                
+                # Adjust highlights (make them warmer/orange)
+                highlights_mask = frame >= 128
+                frame[highlights_mask] = frame[highlights_mask] * [1.1, 1.0, 0.9]  # Orange tint
+                
+                # Clip values to valid range
+                frame = np.clip(frame, 0, 255)
+                
+                return frame.astype(np.uint8)
+            
+            # Apply color grading to each frame
+            return video.fl_image(color_grade_frame)
+            
+        except Exception as e:
+            logger.error(f"Error applying color grading: {str(e)}")
+            raise
+            
     def _apply_blur(self, video: VideoFileClip, 
                    params: Dict[str, float]) -> VideoFileClip:
         """Apply blur effect to the video.
@@ -441,7 +467,18 @@ class VideoGenerator:
         Returns:
             VideoFileClip: Blurred video
         """
-        # Implementation for blur effect
-        # This is a placeholder - actual implementation would apply
-        # blur effect based on provided parameters
-        pass 
+        try:
+            # Get blur parameters
+            radius = int(params.get('radius', 5))
+            
+            def blur_frame(frame):
+                # Apply Gaussian blur
+                blurred = cv2.GaussianBlur(frame, (radius*2+1, radius*2+1), 0)
+                return blurred
+            
+            # Apply blur to each frame
+            return video.fl_image(blur_frame)
+            
+        except Exception as e:
+            logger.error(f"Error applying blur: {str(e)}")
+            raise 
