@@ -1,0 +1,15 @@
+numpy
+torch
+librosa
+gradio
+python-dotenv
+moviepy
+opencv-python
+transformers
+soundfile
+scipy
+pillow
+tqdm
+requests
+pydub
+ffmpeg-python 
