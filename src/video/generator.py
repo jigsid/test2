@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 from typing import Dict, List, Tuple, Optional
 import logging
-from moviepy.editor import VideoFileClip, AudioFileClip, CompositeVideoClip, ColorClip, ImageClip
+from moviepy.editor import VideoFileClip, AudioFileClip, CompositeVideoClip, ColorClip, ImageClip, VideoClip
 import tempfile
 import os
 from PIL import Image, ImageDraw, ImageFilter
@@ -41,7 +41,7 @@ class VideoGenerator:
             if theme.lower() not in self.supported_themes:
                 raise ValueError(f"Unsupported theme. Supported themes: {self.supported_themes}")
             
-            # Create base video clip
+            # Create base video clip with optimized settings
             base_clip = ColorClip((self.width, self.height), 
                                 color=(0, 0, 0),
                                 duration=duration)
@@ -52,12 +52,28 @@ class VideoGenerator:
             # Combine base clip with effects
             final_clip = CompositeVideoClip([base_clip] + effects)
             
-            # Export video
+            # Export video with optimized settings
             temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
-            final_clip.write_videofile(temp_file.name, 
-                                     fps=self.fps,
-                                     codec='libx264',
-                                     audio=False)
+            logger.info(f"Generating video to {temp_file.name}")
+            
+            try:
+                final_clip.write_videofile(
+                    temp_file.name, 
+                    fps=self.fps,
+                    codec='libx264',
+                    audio=False,
+                    preset='ultrafast',
+                    threads=4,
+                    bitrate='2000k',
+                    logger=None  # Disable progress bar
+                )
+            finally:
+                # Clean up clips
+                final_clip.close()
+                base_clip.close()
+                for effect in effects:
+                    if hasattr(effect, 'close'):
+                        effect.close()
             
             return temp_file.name
         except Exception as e:
@@ -141,85 +157,63 @@ class VideoGenerator:
     def _create_particle_system(self, sync_points: List[Tuple[float, float]],
                               energy_profile: np.ndarray) -> VideoFileClip:
         """Create a particle system animation synchronized with the music."""
-        frames = []
         duration = len(energy_profile) / self.fps
-        num_particles = 100
-        particles = []
-
-        # Initialize particles
-        for _ in range(num_particles):
-            particles.append({
-                'x': random.randint(0, self.width),
-                'y': random.randint(0, self.height),
-                'size': random.randint(2, 8),
-                'speed': random.uniform(2, 5),
-                'angle': random.uniform(0, 2 * math.pi)
-            })
-
-        # Create frames
-        for i in range(int(duration * self.fps)):
+        num_particles = 50  # Reduced number of particles
+        
+        def make_frame(t):
             frame = np.zeros((self.height, self.width, 4), dtype=np.uint8)
-            energy = energy_profile[min(i, len(energy_profile) - 1)]
-
-            # Update and draw particles
-            for particle in particles:
-                # Update position based on energy
-                particle['x'] += math.cos(particle['angle']) * particle['speed'] * energy
-                particle['y'] += math.sin(particle['angle']) * particle['speed'] * energy
-
-                # Wrap around screen
-                particle['x'] = particle['x'] % self.width
-                particle['y'] = particle['y'] % self.height
-
+            frame_idx = int(t * self.fps)
+            energy = energy_profile[min(frame_idx, len(energy_profile) - 1)]
+            
+            # Generate particles for this frame
+            for _ in range(num_particles):
+                x = random.randint(0, self.width)
+                y = random.randint(0, self.height)
+                size = int(random.randint(2, 8) * (1 + energy))
+                
                 # Draw particle
-                size = int(particle['size'] * (1 + energy))
                 cv2.circle(frame, 
-                         (int(particle['x']), int(particle['y'])), 
+                         (int(x), int(y)), 
                          size,
                          (255, 255, 255, int(255 * energy)),
                          -1)
+            
+            return frame
 
-                # Change direction slightly
-                particle['angle'] += random.uniform(-0.1, 0.1)
-
-            frames.append(frame)
-
-        # Convert frames to video clip
-        clip = ImageClip(frames[0]).set_duration(duration)
+        # Create clip directly from frame generator
+        clip = VideoClip(make_frame, duration=duration)
         clip = clip.set_position(('center', 'center'))
         return clip
 
     def _create_geometric_patterns(self, sync_points: List[Tuple[float, float]],
                                  energy_profile: np.ndarray) -> VideoFileClip:
         """Create geometric pattern animations synchronized with the music."""
-        frames = []
         duration = len(energy_profile) / self.fps
         pattern_types = ['circles', 'triangles', 'squares']
-        current_pattern = 0
-
-        for i in range(int(duration * self.fps)):
+        
+        def make_frame(t):
             frame = Image.new('RGBA', (self.width, self.height), (0, 0, 0, 0))
             draw = ImageDraw.Draw(frame)
-            energy = energy_profile[min(i, len(energy_profile) - 1)]
-
-            # Change pattern on strong beats
-            for time, strength in sync_points:
-                if abs(time - i/self.fps) < 0.1:
-                    current_pattern = (current_pattern + 1) % len(pattern_types)
-
+            
+            frame_idx = int(t * self.fps)
+            energy = energy_profile[min(frame_idx, len(energy_profile) - 1)]
+            
+            # Determine pattern type based on time
+            current_pattern = int((t / duration) * len(pattern_types)) % len(pattern_types)
+            
             # Draw patterns based on energy
             if pattern_types[current_pattern] == 'circles':
-                num_circles = int(10 * energy)
-                for _ in range(num_circles):
+                num_shapes = int(5 * energy)  # Reduced number of shapes
+                for _ in range(num_shapes):
                     size = random.randint(50, 200)
                     x = random.randint(-size, self.width + size)
                     y = random.randint(-size, self.height + size)
                     draw.ellipse([x-size, y-size, x+size, y+size],
                                outline=(255, 255, 255, int(255 * energy)))
-
+            
             elif pattern_types[current_pattern] == 'triangles':
-                num_triangles = int(8 * energy)
-                for _ in range(num_triangles):
+                num_shapes = int(4 * energy)  # Reduced number of shapes
+                for _ in range(num_shapes):
                     size = random.randint(50, 150)
                     x = random.randint(0, self.width)
                     y = random.randint(0, self.height)
@@ -229,51 +223,50 @@ class VideoGenerator:
                         (x+size, y+size)
                     ]
                     draw.polygon(points, outline=(255, 255, 255, int(255 * energy)))
-
+            
             else:  # squares
-                num_squares = int(6 * energy)
-                for _ in range(num_squares):
+                num_shapes = int(3 * energy)  # Reduced number of shapes
+                for _ in range(num_shapes):
                     size = random.randint(40, 120)
                     x = random.randint(-size, self.width + size)
                     y = random.randint(-size, self.height + size)
                     draw.rectangle([x-size, y-size, x+size, y+size],
                                  outline=(255, 255, 255, int(255 * energy)))
+            
+            return np.array(frame)
 
-            frames.append(np.array(frame))
-
-        clip = ImageClip(frames[0]).set_duration(duration)
+        # Create clip directly from frame generator
+        clip = VideoClip(make_frame, duration=duration)
         clip = clip.set_position(('center', 'center'))
         return clip
 
     def _create_light_flares(self, sync_points: List[Tuple[float, float]]) -> VideoFileClip:
         """Create light flare effects synchronized with strong beats."""
-        frames = []
         duration = sync_points[-1][0] if sync_points else 5.0
         
-        for i in range(int(duration * self.fps)):
+        def make_frame(t):
             frame = Image.new('RGBA', (self.width, self.height), (0, 0, 0, 0))
-            current_time = i / self.fps
-
+            
             # Check for nearby sync points
             for time, strength in sync_points:
-                time_diff = abs(current_time - time)
+                time_diff = abs(t - time)
                 if time_diff < 0.1:  # Within 100ms of beat
                     # Create light flare
-                    flare_size = int(500 * strength)
+                    flare_size = int(300 * strength)  # Reduced size
                     x = random.randint(0, self.width)
                     y = random.randint(0, self.height)
                     
-                    # Create radial gradient
-                    for radius in range(flare_size, 0, -2):
+                    # Create simplified radial gradient
+                    for radius in range(flare_size, 0, -4):  # Larger step size
                         opacity = int(255 * (1 - time_diff*10) * (radius/flare_size) * strength)
                         ImageDraw.Draw(frame).ellipse(
                             [x-radius, y-radius, x+radius, y+radius],
                             fill=(255, 255, 255, opacity)
                         )
                     
-                    # Add lens streaks
-                    for angle in range(0, 360, 45):
-                        streak_length = random.randint(100, 300)
+                    # Add simplified lens streaks
+                    for angle in range(0, 360, 90):  # Reduced number of streaks
+                        streak_length = random.randint(50, 150)  # Reduced length
                         end_x = x + streak_length * math.cos(math.radians(angle))
                         end_y = y + streak_length * math.sin(math.radians(angle))
                         ImageDraw.Draw(frame).line(
@@ -281,74 +274,59 @@ class VideoGenerator:
                             fill=(255, 255, 255, int(127 * strength)),
                             width=2
                         )
-
-            # Apply gaussian blur
-            frame = frame.filter(ImageFilter.GaussianBlur(radius=5))
-            frames.append(np.array(frame))
-
-        clip = ImageClip(frames[0]).set_duration(duration)
+            
+            # Apply minimal blur
+            frame = frame.filter(ImageFilter.GaussianBlur(radius=3))
+            return np.array(frame)
+        
+        # Create clip directly from frame generator
+        clip = VideoClip(make_frame, duration=duration)
         clip = clip.set_position(('center', 'center'))
         return clip
 
     def _create_bokeh_effects(self, energy_profile: np.ndarray) -> VideoFileClip:
         """Create bokeh effects that respond to audio energy."""
-        frames = []
         duration = len(energy_profile) / self.fps
-        bokeh_points = []
-
-        # Initialize bokeh points
-        for _ in range(30):
-            bokeh_points.append({
-                'x': random.randint(0, self.width),
-                'y': random.randint(0, self.height),
-                'size': random.randint(20, 100),
-                'color': (
+        num_bokeh = 15  # Reduced number of bokeh points
+        
+        def make_frame(t):
+            frame = Image.new('RGBA', (self.width, self.height), (0, 0, 0, 0))
+            frame_idx = int(t * self.fps)
+            energy = energy_profile[min(frame_idx, len(energy_profile) - 1)]
+            
+            # Generate bokeh points for this frame
+            for _ in range(num_bokeh):
+                x = random.randint(0, self.width)
+                y = random.randint(0, self.height)
+                size = int(random.randint(20, 60) * (0.5 + energy))  # Reduced size
+                color = (
                     random.randint(200, 255),
                     random.randint(200, 255),
                     random.randint(200, 255)
                 )
-            })
-
-        for i in range(int(duration * self.fps)):
-            frame = Image.new('RGBA', (self.width, self.height), (0, 0, 0, 0))
-            energy = energy_profile[min(i, len(energy_profile) - 1)]
-
-            # Draw and update bokeh points
-            for point in bokeh_points:
-                # Scale size with energy
-                current_size = int(point['size'] * (0.5 + energy))
                 
-                # Create bokeh circle
-                bokeh = Image.new('RGBA', (current_size*2, current_size*2), (0, 0, 0, 0))
+                # Create simplified bokeh circle
+                bokeh = Image.new('RGBA', (size*2, size*2), (0, 0, 0, 0))
                 draw = ImageDraw.Draw(bokeh)
                 
-                # Draw gradient circle
-                for radius in range(current_size, 0, -1):
-                    opacity = int(255 * (radius/current_size) * 0.5)
-                    color = tuple(list(point['color']) + [opacity])
-                    draw.ellipse([current_size-radius, current_size-radius,
-                                current_size+radius, current_size+radius],
-                               fill=color)
-
-                # Apply gaussian blur
-                bokeh = bokeh.filter(ImageFilter.GaussianBlur(radius=3))
+                # Draw simplified gradient circle
+                for radius in range(size, 0, -2):  # Larger step size
+                    opacity = int(255 * (radius/size) * 0.5)
+                    color_with_alpha = tuple(list(color) + [opacity])
+                    draw.ellipse([size-radius, size-radius,
+                                size+radius, size+radius],
+                               fill=color_with_alpha)
+                
+                # Apply minimal blur
+                bokeh = bokeh.filter(ImageFilter.GaussianBlur(radius=2))
                 
                 # Paste bokeh onto frame
-                frame.paste(bokeh, (int(point['x']-current_size),
-                                  int(point['y']-current_size)),
-                          bokeh)
-
-                # Move points slowly
-                point['x'] += random.uniform(-1, 1)
-                point['y'] += random.uniform(-1, 1)
-
-                # Wrap around screen
-                point['x'] = point['x'] % self.width
-                point['y'] = point['y'] % self.height
-
-            frames.append(np.array(frame))
-
-        clip = ImageClip(frames[0]).set_duration(duration)
+                frame.paste(bokeh, (int(x-size), int(y-size)), bokeh)
+            
+            return np.array(frame)
+        
+        # Create clip directly from frame generator
+        clip = VideoClip(make_frame, duration=duration)
         clip = clip.set_position(('center', 'center'))
         return clip
         
@@ -363,18 +341,41 @@ class VideoGenerator:
             str: Path to the combined video file
         """
         try:
-            # Load video and audio
+            # Load video and audio with optimized settings
             video = VideoFileClip(video_path)
             audio = AudioFileClip(audio_path)
             
             # Set audio
             final_video = video.set_audio(audio)
             
-            # Export combined video
+            # Export combined video with optimized settings
             temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
-            final_video.write_videofile(temp_file.name,
-                                      fps=self.fps,
-                                      codec='libx264')
+            logger.info(f"Combining video and audio to {temp_file.name}")
+            
+            try:
+                final_video.write_videofile(
+                    temp_file.name,
+                    fps=self.fps,
+                    codec='libx264',
+                    preset='ultrafast',
+                    threads=4,
+                    bitrate='2000k',
+                    logger=None,  # Disable progress bar
+                    ffmpeg_params=['-movflags', 'faststart']  # Optimize for streaming
+                )
+            finally:
+                # Clean up
+                video.close()
+                audio.close()
+                if hasattr(final_video, 'close'):
+                    final_video.close()
+            
+            # Remove temporary input video
+            if os.path.exists(video_path):
+                try:
+                    os.unlink(video_path)
+                except:
+                    pass
             
             return temp_file.name
         except Exception as e:
